@@ -49,6 +49,9 @@ enum AgentControl {
     static var controlDir: URL { supportDir.appendingPathComponent("control", isDirectory: true) }
     static var zdotdir: URL { supportDir.appendingPathComponent("zsh", isDirectory: true) }
     static var hooksFile: URL { supportDir.appendingPathComponent("claude-hooks.json") }
+    /// Inbox dir where the lead card drops fleet commands (add/remove). Each
+    /// command is a uniquely-named JSON file Runway consumes and deletes.
+    static var fleetInbox: URL { supportDir.appendingPathComponent("fleet", isDirectory: true) }
 
     static func file(for id: UUID) -> URL {
         controlDir.appendingPathComponent("\(id.uuidString).json")
@@ -58,10 +61,12 @@ enum AgentControl {
     /// wrapper that auto-injects Claude Code hooks.
     static func environment(for id: UUID) -> [String: String] {
         try? FileManager.default.createDirectory(at: controlDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: fleetInbox, withIntermediateDirectories: true)
         return [
             "RUNWAY_BOX": id.uuidString,
             "RUNWAY_CONTROL": file(for: id).path,
             "RUNWAY_CLAUDE_HOOKS": hooksFile.path,
+            "RUNWAY_FLEET": fleetInbox.path,
             "ZDOTDIR": zdotdir.path,
         ]
     }
@@ -73,8 +78,17 @@ enum AgentControl {
     // MARK: One-time install (idempotent; call at launch)
 
     static func install() {
+        clearFleetInbox()   // drop stale commands from a previous run
         writeHooks()
         writeZshWrapper()
+    }
+
+    /// Remove any leftover command files so a relaunch doesn't replay them.
+    private static func clearFleetInbox() {
+        try? FileManager.default.createDirectory(at: fleetInbox, withIntermediateDirectories: true)
+        let files = (try? FileManager.default.contentsOfDirectory(at: fleetInbox,
+                                                                  includingPropertiesForKeys: nil)) ?? []
+        for f in files { try? FileManager.default.removeItem(at: f) }
     }
 
     private static func writeHooks() {
@@ -108,6 +122,23 @@ enum AgentControl {
         [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
         if [ -n "$RUNWAY_CONTROL" ] && [ -n "$RUNWAY_CLAUDE_HOOKS" ]; then
           claude() { command claude --settings "$RUNWAY_CLAUDE_HOOKS" "$@"; }
+        fi
+        # Fleet control: add/remove agent cards. Only honored by Runway when run
+        # from the current lead card (star a card in the board to make it lead).
+        if [ -n "$RUNWAY_FLEET" ]; then
+          runway() {
+            local action="$1" name="$2"
+            local file="$RUNWAY_FLEET/$(date +%s)-$$-$RANDOM.json"
+            case "$action" in
+              add)
+                printf '{"action":"add","name":"%s","from":"%s"}' "$name" "$RUNWAY_BOX" > "$file" ;;
+              remove)
+                if [ -z "$name" ]; then echo "usage: runway remove <name>" >&2; return 1; fi
+                printf '{"action":"remove","name":"%s","from":"%s"}' "$name" "$RUNWAY_BOX" > "$file" ;;
+              *)
+                echo "usage: runway add [name] | runway remove <name>" >&2; return 1 ;;
+            esac
+          }
         fi
         """)
     }

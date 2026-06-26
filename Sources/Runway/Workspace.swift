@@ -23,6 +23,13 @@ import AppKit
     /// Width of the left pane (the split divider position).
     var leftWidth: CGFloat = 460
 
+    /// Freeform scratchpad shown in the lower-left. Autosaved with the layout.
+    var notes: String = ""
+
+    /// The card designated as "lead" (a purely visual marker — pinned to the top
+    /// of the board with a badge). `nil` = no lead.
+    var leadID: UUID?
+
     /// True while the window is full screen (no traffic lights → less top inset).
     var isFullScreen = false
 
@@ -40,6 +47,8 @@ import AppKit
         var leftWidth: CGFloat
         var quickHeight: CGFloat
         var accordion: Bool
+        var notes: String?    // optional: older state files predate it
+        var leadID: UUID?     // optional: older state files predate it
     }
 
     private static var stateFile: URL { AgentControl.supportDir.appendingPathComponent("workspace.json") }
@@ -51,13 +60,16 @@ import AppKit
         leftWidth = s.leftWidth
         quickHeight = s.quickHeight
         accordion = s.accordion
+        notes = s.notes ?? notes
+        leadID = s.leadID
         lastSaved = data
     }
 
     /// Write current layout to disk if it changed. Cheap enough to call on the poll tick.
     func saveIfNeeded() {
         let snapshot = Persisted(boxes: boxes, leftWidth: leftWidth,
-                                 quickHeight: quickHeight, accordion: accordion)
+                                 quickHeight: quickHeight, accordion: accordion,
+                                 notes: notes, leadID: leadID)
         guard let data = try? JSONEncoder().encode(snapshot), data != lastSaved else { return }
         lastSaved = data
         try? data.write(to: Self.stateFile)
@@ -75,6 +87,7 @@ import AppKit
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 pollControlFiles()
+                processFleetCommands()
                 saveIfNeeded()
             }
         }
@@ -101,28 +114,80 @@ import AppKit
         }
     }
 
+    /// Consume fleet commands dropped by the lead card (add/remove). A command is
+    /// only honored if its `from` matches the *current* lead — so the ability
+    /// follows the lead badge even if you re-assign it at runtime.
+    private func processFleetCommands() {
+        let inbox = AgentControl.fleetInbox
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: inbox, includingPropertiesForKeys: nil) else { return }
+        // Process oldest-first; the filename prefix is a unix timestamp.
+        for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            defer { try? FileManager.default.removeItem(at: file) }
+            guard let data = try? Data(contentsOf: file),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let action = json["action"] as? String else { continue }
+            // Lead-only: ignore commands unless they came from the current lead card.
+            guard let leadID, (json["from"] as? String) == leadID.uuidString else { continue }
+            switch action {
+            case "add":
+                addBox(named: json["name"] as? String)
+            case "remove":
+                if let name = (json["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !name.isEmpty {
+                    removeBox(named: name)
+                }
+            default:
+                break
+            }
+        }
+    }
+
     // MARK: Actions (driven by the keyboard monitor + clicks)
 
-    func newBox() {
-        let box = AgentBox(name: "agent\(boxes.count + 1)")
+    func newBox() { addBox() }
+
+    /// Append a new agent card (optionally named) and focus it.
+    @discardableResult
+    func addBox(named name: String? = nil) -> AgentBox {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let box = AgentBox(name: (trimmed?.isEmpty == false)
+                           ? String(trimmed!.prefix(40))
+                           : "agent\(boxes.count + 1)")
         boxes.append(box)
         setFocus(box.id)
+        return box
     }
 
     @discardableResult
     func closeFocused() -> Bool {
         guard let idx = focusedIndex else { return false }
+        removeBox(at: idx)
+        return true
+    }
+
+    /// Remove the first card matching `name` (used by the fleet control channel).
+    func removeBox(named name: String) {
+        guard let idx = boxes.firstIndex(where: { $0.name == name }) else { return }
+        removeBox(at: idx)
+    }
+
+    /// Remove a card and tidy up its session/registry/lead/focus state.
+    private func removeBox(at idx: Int) {
+        guard boxes.indices.contains(idx) else { return }
         let removed = boxes.remove(at: idx)
         TerminalRegistry.shared.unregister(id: removed.id)
         AgentControl.cleanup(removed.id)
         lastControl[removed.id] = nil
-        if boxes.isEmpty {
-            focusedID = nil
-            soloed = false
-        } else {
-            setFocus(boxes[min(idx, boxes.count - 1)].id)
+        if leadID == removed.id { leadID = nil }
+        if focusedID == removed.id {
+            if boxes.isEmpty {
+                focusedID = nil
+                soloed = false
+            } else {
+                setFocus(boxes[min(idx, boxes.count - 1)].id)
+            }
         }
-        return true
     }
 
     func focus(offset: Int) {
@@ -142,6 +207,11 @@ import AppKit
         let target = idx + delta
         guard boxes.indices.contains(target) else { return }
         boxes.swapAt(idx, target)
+    }
+
+    /// Toggle which card is the (visual) lead. Only one at a time.
+    func toggleLead(_ id: UUID) {
+        leadID = (leadID == id) ? nil : id
     }
 
     func toggleAccordion() {

@@ -442,7 +442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installClickFocusMonitor()
         installShortcutMonitor()
         Workspace.shared.startAgentWatch()
-        GitHubFeed.shared.startPolling()
+        // GitHub activity feed disabled — the left pane is now an agents board.
+        // (GitHubFeed.swift is left in place so the feed can be restored later.)
         observeFullScreen()
     }
 
@@ -539,7 +540,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       let hit = window.contentView?.hitTest(ev.locationInWindow)
                 else { return false }
 
-                // Left pane (the activity feed) scrolls natively — the ⌘-lock is
+                // Left pane (the agents board) scrolls natively — the ⌘-lock is
                 // only for the right/terminal pane.
                 if ev.locationInWindow.x < Workspace.shared.leftWidth { return false }
 
