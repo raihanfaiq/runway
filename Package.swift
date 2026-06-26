@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.2
 import PackageDescription
 
 let package = Package(
@@ -19,7 +19,11 @@ let package = Package(
             dependencies: [
                 .product(name: "GhosttyKit", package: "GhosttyKit")
             ],
-            path: "Sources/Runway"
+            path: "Sources/Runway",
+            // The app is entirely main-thread (SwiftUI); the author's build relied
+            // on module-wide default MainActor isolation. Scope it to this target
+            // only — applying it to GhosttyKit breaks its C-function-pointer code.
+            swiftSettings: [.defaultIsolation(MainActor.self)]
         )
     ],
     swiftLanguageModes: [.v6]
