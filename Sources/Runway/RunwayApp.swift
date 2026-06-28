@@ -9,6 +9,15 @@ struct RunwayApp: App {
     init() {
         // Must run before any terminal (GhosttyKit) loads its config.
         RunwayTerminal.installTheme()
+        // Apply Runway's config to the ghostty app BEFORE any surface is created.
+        // A live surface's updateConfig re-applies colors but NOT the
+        // mouse-scroll-multiplier, so the multiplier only takes effect if it's in
+        // the app config a surface inherits at birth. Forcing `themedConfig` here
+        // builds the host + pushes our config (incl. precision:0.1) onto the app.
+        MainActor.assumeIsolated {
+            _ = RunwayTerminalHost.shared        // runs ghostty_init/app_new first…
+            _ = RunwayTerminalHost.themedConfig  // …so ghostty_config_new here is safe
+        }
     }
 
     var body: some Scene {
@@ -124,9 +133,16 @@ struct RightPane: View {
                     .padding(16)
                     .frame(minHeight: (ws.accordion || ws.soloed) ? geo.size.height : nil,
                            alignment: .top)
+                    // Force a persistent, draggable scroll bar regardless of the
+                    // macOS "Show scroll bars" setting (which auto-hides overlay
+                    // scrollers for trackpad / Magic Mouse users). Lives inside the
+                    // scroll document view so it can reach the enclosing NSScrollView.
+                    .background(AlwaysVisibleScroller(enabled: !(ws.accordion || ws.soloed)))
                 }
                 .scrollDisabled(ws.accordion || ws.soloed)
-                .scrollIndicators(.hidden)
+                // Grab the thumb to reach agent10 and scroll to its card's end
+                // (works without the ⌘-lock, which only gates the scroll wheel).
+                .scrollIndicators(.visible)
                 .onChange(of: ws.focusedID) { _, id in
                     guard let id else { return }
                     withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
@@ -199,6 +215,39 @@ struct RightPane: View {
     }
 }
 
+/// Reaches up to the SwiftUI `ScrollView`'s backing `NSScrollView` and forces a
+/// legacy (always-visible, draggable) vertical scroller. SwiftUI's
+/// `.scrollIndicators(.visible)` still defers to the macOS "Show scroll bars"
+/// setting, which hides overlay scrollers for trackpad / Magic Mouse users — so
+/// the bar appears to "not exist". The legacy style is independent of that setting
+/// and its thumb is draggable, bypassing the ⌘-scroll wheel lock.
+private struct AlwaysVisibleScroller: NSViewRepresentable {
+    var enabled: Bool
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: .zero)
+        apply(from: v)
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        apply(from: nsView)
+    }
+
+    /// Defer to the next runloop tick so the view is in the hierarchy and SwiftUI
+    /// has finished its own scroller configuration before we override it.
+    private func apply(from view: NSView) {
+        let want = enabled
+        DispatchQueue.main.async {
+            guard let scrollView = view.enclosingScrollView else { return }
+            scrollView.scrollerStyle = want ? .legacy : .overlay
+            scrollView.hasVerticalScroller = true
+            scrollView.autohidesScrollers = !want
+            scrollView.verticalScroller?.alphaValue = want ? 1 : scrollView.verticalScroller?.alphaValue ?? 1
+        }
+    }
+}
+
 /// An agent card: a green status dot + name on the left, status word on the
 /// right, with a live GPU terminal (libghostty) filling the body. Height is
 /// resizable via the bottom edge.
@@ -260,6 +309,7 @@ private struct ResizableBox: View {
             Spacer(minLength: 8)
             detailField
                 .layoutPriority(0)
+            if isHoveringHeader { closeButton }
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 9)
@@ -267,6 +317,24 @@ private struct ResizableBox: View {
         .contentShape(Rectangle())
         .onHover { isHoveringHeader = $0 }
         .onTapGesture { Workspace.shared.focusedID = id }
+    }
+
+    /// Small × in the card header (revealed on hover) to close this agent —
+    /// the click-to-close counterpart of ⌘W.
+    private var closeButton: some View {
+        Button { Workspace.shared.close(id) } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(Color.white.opacity(0.08)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+        }
+        .help("Close agent (⌘W)")
     }
 
     /// The agent name: a label that becomes an inline text field when clicked.
@@ -444,6 +512,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Workspace.shared.startAgentWatch()
         // GitHub activity feed disabled — the left pane is now an agents board.
         // (GitHubFeed.swift is left in place so the feed can be restored later.)
+        PRStore.shared.startPolling()   // live open-PR list in the lower-left pane
         observeFullScreen()
     }
 

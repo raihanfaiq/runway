@@ -23,7 +23,12 @@ enum RunwayTerminalHost {
     static let shared = try? GhosttyTerminalHost(loadDefaultTheme: false)
 
     /// Built once: user's config + Runway's neutral theme last. Applied app-wide
-    /// here; each surface also gets it via `session.updateConfig` after it attaches.
+    /// here (so surfaces are *born* with it — see `RunwayApp.init`), and each
+    /// surface also gets it via `session.updateConfig` after it attaches.
+    ///
+    /// Note: a live surface's `updateConfig` re-applies colors but NOT the
+    /// `mouse-scroll-multiplier`; that one only takes from the app config a surface
+    /// inherits at creation, which is why this must run before any surface exists.
     static let themedConfig: ghostty_config_t? = {
         guard let cfg = ghostty_config_new() else { return nil }
         ghostty_config_load_default_files(cfg)
@@ -95,14 +100,18 @@ struct TerminalSurfaceView: View {
     return GhosttyTerminalSession(configuration: launch)
 }
 
-/// Push Runway's themed config onto a session's surface. The surface may not
-/// exist on the first call, so retry once shortly after.
+/// Push Runway's themed colors onto a session's surface. The surface is created
+/// asynchronously after the view attaches, so an early call can land before it
+/// exists and silently no-op; retry a couple of times so the colors take. (The
+/// scroll multiplier is handled at app-config level in `RunwayApp.init`, not here.)
 @MainActor func applyRunwayTheme(to session: GhosttyTerminalSession) {
     guard let cfg = RunwayTerminalHost.themedConfig else { return }
-    session.updateConfig(cfg)
-    Task { @MainActor in
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        session.updateConfig(cfg)
+    let delaysMs: [UInt64] = [0, 250, 750]
+    for d in delaysMs {
+        Task { @MainActor in
+            if d > 0 { try? await Task.sleep(nanoseconds: d * 1_000_000) }
+            session.updateConfig(cfg)
+        }
     }
 }
 

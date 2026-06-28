@@ -35,6 +35,11 @@ enum RunwayTerminal {
     private static let themeContents = """
     # Runway embedded-terminal theme: neutral near-black, opaque, flat.
     font-size = 11
+    # Slower scrolling — Ghostty defaults are precision:1 (trackpad), discrete:3
+    # (mouse wheel). Trackpads/Magic Mouse emit precision events; a notched wheel
+    # emits discrete. Drop both well below default so the agent CLI scrollback is
+    # easy to read while scrolling up.
+    mouse-scroll-multiplier = precision:0.1,discrete:0.5
     background = 0e1012
     foreground = e6e6e6
     cursor-color = e6e6e6

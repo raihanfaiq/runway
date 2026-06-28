@@ -166,6 +166,12 @@ import AppKit
         return true
     }
 
+    /// Close a specific card by id (used by the card's × button).
+    func close(_ id: UUID) {
+        guard let idx = boxes.firstIndex(where: { $0.id == id }) else { return }
+        removeBox(at: idx)
+    }
+
     /// Remove the first card matching `name` (used by the fleet control channel).
     func removeBox(named name: String) {
         guard let idx = boxes.firstIndex(where: { $0.name == name }) else { return }

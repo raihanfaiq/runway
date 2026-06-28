@@ -9,7 +9,7 @@ import AppKit
 struct LeftPane: View {
     @Bindable private var ws = Workspace.shared
     /// Natural height of the agent rows, so the list sizes to its content (and only
-    /// scrolls past a cap) — leaving the rest of the pane for the notes pad.
+    /// scrolls past a cap) — leaving the rest of the pane for the PR list.
     @State private var listContentHeight: CGFloat = 0
 
     var body: some View {
@@ -22,7 +22,7 @@ struct LeftPane: View {
                     summary
                     list(cap: geo.size.height * 0.5)
                 }
-                notesSection
+                PRListView()
                 footer
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -119,42 +119,8 @@ struct LeftPane: View {
             })
         }
         .frame(height: min(listContentHeight, cap))
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.visible)
         .onPreferenceChange(ListHeightKey.self) { listContentHeight = $0 }
-    }
-
-    // MARK: Notes scratchpad
-    private var notesSection: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("NOTES")
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.3))
-                .tracking(0.8)
-                .padding(.horizontal, 16)
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $ws.notes)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.78))
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                if ws.notes.isEmpty {
-                    Text("Jot tasks, todos, snippets…")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.25))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 14)
-                        .allowsHitTesting(false)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.03)))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.06), lineWidth: 1))
-            .padding(.horizontal, 12)
-        }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .padding(.top, 4)
-        .padding(.bottom, 12)
     }
 
     private var emptyNotice: some View {
